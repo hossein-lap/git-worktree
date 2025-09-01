@@ -13,6 +13,7 @@ use Cwd;
 my $input = '';
 my $output = '';
 my $args = '';
+my $action = '';
 my $sshkey = '';
 my $help = 0;
 my $prompt = basename($0);
@@ -26,15 +27,18 @@ setup git worktree and bare repo
 usage: $prompt [COMMAND] [OPTIONS]
 
    • COMMAND
-       init            clone the git repository and setup the worktees
+       init            clone the git repository and setup the worktrees
+       sync            sync all worktrees with the remote (create new ones)
+       bulk            run a shell command in all current (active) worktrees
        copy            copy a bare repo with its activated worktrees
        move            move a bare repo with its activated worktrees
 
    • OPTIONS
-       -u --url      repo url (ssh)
-       -d --dir      directory name
-       -a --args     extra args (to pass to the git)
-       -h --help     print this message
+       --url      repository url        (remote)
+       --dir      repository directory  (local)
+       --args     extra git arguments
+       --action   bulk action
+       --help     print this message
 
    • EXAMPLE:
        $prompt init --url gitlab.com:hos-workflow/scripts --dir test.git --args '--depth 1'
@@ -46,15 +50,26 @@ EOF
 
 # argument parsing {{{
 GetOptions(
-    'u|url=s'      => \$input,
-    'd|dir=s'      => \$output,
-    'a|args=s'     => \$args,
-    'k|sshkey=s'   => \$sshkey,
-    'h|help'       => \$help,
+    'url=s'      => \$input,
+    'dir=s'      => \$output,
+    'args=s'     => \$args,
+    'action=s'   => \$action,
+    'sshkey=s'   => \$sshkey,
+    'h|help'     => \$help,
 ) or die "$prompt: Error in command line arguments. Use -h for help.\n";
 # }}}
 
 # helper functions {{{
+
+# run shell command {{{
+sub commander {
+    my ($command) = @_;
+    my @output = qx($command);
+    my $exit_code = $? >> 8;
+    chomp @output;
+    return (\@output, $exit_code);
+}
+# }}}
 
 # get list of directories {{{
 sub dirlist {
@@ -285,8 +300,11 @@ sub wrapper_cmd {
         my $destination = shift @ARGV;
         move_handler($source, $destination, $cmd);
     } elsif ($cmd eq "init") {
+        init();
+    } elsif ($cmd eq "bulk") {
+        bulk($action);
+    } elsif ($cmd eq "sync") {
         sync();
-        # init();
     } else {
         print(STDERR "$prompt: $cmd: Invalid command, try --help flag\n");
         exit 2;
@@ -295,70 +313,45 @@ sub wrapper_cmd {
 }
 # }}}
 
-# }}}
-
-# starting point
-
-if ($help) {
-    print_help();
-    exit($help ? 0 : 1);
-}
-
-# handle commands {{{
-my $cmd = shift @ARGV;
-my $command = 1 if defined $cmd;
-
-if ($cmd) {
-    # decide: move command
-    wrapper_cmd($cmd);
-    exit 0;
-}
-# }}}
-
-# checking args  {{{
-unless ($command) {
-    if ($help || !$input) {
-        print_help();
-        exit($help ? 0 : 1);
+# url handler {{{
+sub url_handler {
+    my ($input) = @_;
+    if ($input =~ /https:/) {
+        my $_counter = split(":", $input); # 2: current, 1: none, 3: extra
+        my @_tmp = split("/", $input, 4);
+        if ($_counter eq 3) {
+            $input = "git\@$_tmp[2]/$_tmp[3]";
+        } else {
+            $input = "git\@$_tmp[2]:$_tmp[3]";
+        }
     }
-}
 
-if ($input =~ /https:/) {
+    unless ($input =~ /git@/) {
+        $input = 'git@'.$input;
+    }
+
+    unless ($input =~ /.git$/) {
+        $input = $input.'.git';
+    }
+
     my $_counter = split(":", $input); # 2: current, 1: none, 3: extra
-    my @_tmp = split("/", $input, 4);
-    if ($_counter eq 3) {
-        $input = "git\@$_tmp[2]/$_tmp[3]";
-    } else {
-        $input = "git\@$_tmp[2]:$_tmp[3]";
+    if ($_counter ne 2) {
+        if ($_counter eq 1) {
+            my @_tmp = split("/", $input, 2);
+            $input = "$_tmp[0]:$_tmp[1]";
+        }
     }
-}
-
-unless ($input =~ /git@/) {
-    $input = 'git@'.$input;
-}
-
-unless ($input =~ /.git$/) {
-    $input = $input.'.git';
-}
-
-my $_counter = split(":", $input); # 2: current, 1: none, 3: extra
-if ($_counter ne 2) {
-    if ($_counter eq 1) {
-        my @_tmp = split("/", $input, 2);
-        $input = "$_tmp[0]:$_tmp[1]";
-    }
-}
-
-if (!$output) {
-    print("No directory name is specified, Using default directory name, ");
-    ($output) = $input =~ m{([^/]+)$};
+    return $input;
 }
 # }}}
 
-# define commands {{{
+# }}}
+
+# worker functions {{{
 
 # init {{{
 sub init {
+    my $url = url_handler($input);
     my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
     my $clone_cmd = "$ssh_prefix git clone $args --bare $input $output";
     system($clone_cmd) == 0 or die "$prompt: failed to clone repository\n";
@@ -397,5 +390,71 @@ sub sync {
 }
 # }}}
 
+# bulk action {{{
+sub bulk {
+    my $subname = (caller(0))[3];
+    my ($git_cmd) = @_;
+    unless ($git_cmd) {
+        print(STDERR "No action is specified\n");
+        exit 1;
+    }
+    my ($result_ref, $exit_code) = commander("git worktree list");
+    my @_worktrees = @{$result_ref};
+    my @worktrees;
+    foreach my $worktree (@_worktrees) {
+        if ($worktree =~ /\.bare/) {
+            next;
+        }
+        my @_worktree = split(" ", $worktree);
+        push(@worktrees, $_worktree[0]);
+    }
+
+    foreach my $worktree (@worktrees) {
+        chdir($worktree);
+        print("$subname ");
+        my $branch = `git branch --show-current`;
+        chomp($branch);
+        print("[worktree] $branch\n");
+
+        my $exit_code = system($git_cmd) >> 8;
+
+        print(STDERR "$subname [worktree] $branch (shell returned $exit_code)\n") if $exit_code;
+        # print("$exit_code\n");
+    }
+}
+# }}}
+
+# }}}
+
+# starting point
+
+if ($help) {
+    print_help();
+    exit($help ? 0 : 1);
+}
+
+# handle commands {{{
+my $cmd = shift @ARGV;
+my $command = 1 if defined $cmd;
+
+if ($cmd) {
+    # decide: move command
+    wrapper_cmd($cmd);
+    exit 0;
+}
+# }}}
+
+# checking args  {{{
+unless ($command) {
+    if ($help || !$input) {
+        print_help();
+        exit($help ? 0 : 1);
+    }
+}
+
+if (!$output) {
+    print("No directory name is specified, Using default directory name, ");
+    ($output) = $input =~ m{([^/]+)$};
+}
 # }}}
 
