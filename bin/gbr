@@ -17,6 +17,7 @@ my $action = '';
 my @ignore = ();
 my $sshkey = '';
 my $help = 0;
+my $silent = 0;
 my $prompt = basename($0);
 # }}}
 
@@ -40,6 +41,7 @@ usage: $prompt [COMMAND] [OPTIONS]
        --args     extra git arguments
        --action   bulk action
        --ignore   ignore worktree (bulk action)
+       --silent   no extra output (bulk action)
        --help     print this message
 
    • EXAMPLE:
@@ -58,6 +60,7 @@ GetOptions(
     'action=s'   => \$action,
     'ignore=s@'  => \@ignore,
     'sshkey=s'   => \$sshkey,
+    'silent'     => \$silent,
     'h|help'     => \$help,
 ) or die "$prompt: Error in command line arguments. Use -h for help.\n";
 # }}}
@@ -396,9 +399,10 @@ sub sync {
 # bulk action {{{
 sub bulk {
     my $subname = (caller(0))[3];
-    my $msg_prefix = "$subname [worktree]";
-    my ($git_cmd) = @_;
-    unless ($git_cmd) {
+    my $msg_prefix = "$subname [worktree] ";
+    $msg_prefix = "" if $silent;
+    my ($shell_cmd) = @_;
+    unless ($shell_cmd) {
         print(STDERR "No action is specified\n");
         exit 1;
     }
@@ -419,6 +423,8 @@ sub bulk {
         chdir($worktree);
         my $branch = `git branch --show-current`;
         chomp($branch);
+        my $msg_inner = "$branch ";
+        $msg_inner = "" if $silent;
 
         foreach my $ig (@ignore) {
             if ($branch =~ /$ig/) {
@@ -427,11 +433,18 @@ sub bulk {
         }
 
         if ($skip) {
-            print("$msg_prefix $branch >> skip\n");
+            print("$msg_prefix$branch >> skip\n");
         } else {
-            print("$msg_prefix $branch\n");
-            my $exit_code = system($git_cmd) >> 8;
-            print(STDERR "$msg_prefix $branch (shell returned $exit_code)\n") if $exit_code;
+
+            my ($result_ref, $exit_code) = commander($shell_cmd);
+            my @cmd_output = @{$result_ref};
+            foreach my $line (@cmd_output) {
+                print("$msg_prefix$msg_inner$line\n");
+            }
+            # print("\n");
+            if ($exit_code) {
+                print(STDERR "$msg_prefix $branch (shell returned $exit_code)\n");
+            }
         }
         # print("$exit_code\n");
     }
