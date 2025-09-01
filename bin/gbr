@@ -14,6 +14,7 @@ my $input = '';
 my $output = '';
 my $args = '';
 my $action = '';
+my @ignore = ();
 my $sshkey = '';
 my $help = 0;
 my $prompt = basename($0);
@@ -38,6 +39,7 @@ usage: $prompt [COMMAND] [OPTIONS]
        --dir      repository directory  (local)
        --args     extra git arguments
        --action   bulk action
+       --ignore   ignore worktree (bulk action)
        --help     print this message
 
    • EXAMPLE:
@@ -54,6 +56,7 @@ GetOptions(
     'dir=s'      => \$output,
     'args=s'     => \$args,
     'action=s'   => \$action,
+    'ignore=s@'  => \@ignore,
     'sshkey=s'   => \$sshkey,
     'h|help'     => \$help,
 ) or die "$prompt: Error in command line arguments. Use -h for help.\n";
@@ -302,7 +305,7 @@ sub wrapper_cmd {
     } elsif ($cmd eq "init") {
         init();
     } elsif ($cmd eq "bulk") {
-        bulk($action);
+        bulk($action, @ignore);
     } elsif ($cmd eq "sync") {
         sync();
     } else {
@@ -393,6 +396,7 @@ sub sync {
 # bulk action {{{
 sub bulk {
     my $subname = (caller(0))[3];
+    my $msg_prefix = "$subname [worktree]";
     my ($git_cmd) = @_;
     unless ($git_cmd) {
         print(STDERR "No action is specified\n");
@@ -410,15 +414,25 @@ sub bulk {
     }
 
     foreach my $worktree (@worktrees) {
+        my $skip = 0;
+
         chdir($worktree);
-        print("$subname ");
         my $branch = `git branch --show-current`;
         chomp($branch);
-        print("[worktree] $branch\n");
 
-        my $exit_code = system($git_cmd) >> 8;
+        foreach my $ig (@ignore) {
+            if ($branch =~ /$ig/) {
+                $skip = 1;
+            }
+        }
 
-        print(STDERR "$subname [worktree] $branch (shell returned $exit_code)\n") if $exit_code;
+        if ($skip) {
+            print("$msg_prefix $branch >> skip\n");
+        } else {
+            print("$msg_prefix $branch\n");
+            my $exit_code = system($git_cmd) >> 8;
+            print(STDERR "$msg_prefix $branch (shell returned $exit_code)\n") if $exit_code;
+        }
         # print("$exit_code\n");
     }
 }
