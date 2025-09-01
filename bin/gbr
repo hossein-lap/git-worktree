@@ -21,22 +21,23 @@ my $prompt = basename($0);
 # help function {{{
 sub print_help {
     print <<"EOF";
-$prompt: setup git worktree and bare repo
+setup git worktree and bare repo
 
-usage: [-h] [-u url] [-d directory] [-a extra_args]
+usage: $prompt [COMMAND] [OPTIONS]
 
-   • arguments:
+   • COMMAND
+       init            clone the git repository and setup the worktees
+       copy            copy a bare repo with its activated worktrees
+       move            move a bare repo with its activated worktrees
+
+   • OPTIONS
        -u --url      repo url (ssh)
        -d --dir      directory name
        -a --args     extra args (to pass to the git)
        -h --help     print this message
 
-   • commands:
-       cp            copy a bare repo with its activated worktrees
-       mv            move a bare repo with its activated worktrees
-
-   • example:
-       $prompt -u gitlab.com:hos-workflow/scripts -d test.git -a '--depth 1'
+   • EXAMPLE:
+       $prompt init --url gitlab.com:hos-workflow/scripts --dir test.git --args '--depth 1'
 
    • running without any arguments will show this message
 EOF
@@ -183,14 +184,14 @@ sub move_handler {
     }
 
     my $err = 0;
-    if ($cmd eq "cp") {
+    if ($cmd eq "copy") {
         $err = system("cp", "-r", "$file_source", "$parsed_output_file");
         if ($err eq 0) {
             print("$file_source -> $file_dest\n");
         } else {
             print(STDERR "$prompt: $cmd: command failed\n");
         }
-    } elsif ($cmd eq "mv") {
+    } elsif ($cmd eq "move") {
         $err = system("mv", "$file_source", "$parsed_output_file");
         if ($err eq 0) {
             print("$file_source -> $file_dest\n");
@@ -279,10 +280,13 @@ sub move_handler {
 sub wrapper_cmd {
     my $cmd = $_[0];
     my $err = 0;
-    if ($cmd eq "cp" || $cmd eq "mv") {
+    if ($cmd eq "copy" || $cmd eq "move") {
         my $source = shift @ARGV;
         my $destination = shift @ARGV;
         move_handler($source, $destination, $cmd);
+    } elsif ($cmd eq "init") {
+        sync();
+        # init();
     } else {
         print(STDERR "$prompt: $cmd: Invalid command, try --help flag\n");
         exit 2;
@@ -351,35 +355,47 @@ if (!$output) {
 }
 # }}}
 
-# main {{{
+# define commands {{{
 
-my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
-my $clone_cmd = "$ssh_prefix git clone $args --bare $input $output";
-system($clone_cmd) == 0 or die "$prompt: failed to clone repository\n";
-system("cd $output; git config core.sshCommand 'ssh -i $ssh_prefix'; cd -") if $ssh_prefix;
+# init {{{
+sub init {
+    my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
+    my $clone_cmd = "$ssh_prefix git clone $args --bare $input $output";
+    system($clone_cmd) == 0 or die "$prompt: failed to clone repository\n";
+    system("cd $output; git config core.sshCommand 'ssh -i $ssh_prefix'; cd -") if $ssh_prefix;
 
-chdir $output or die "$prompt: cannot change directory to $output: $!\n";
-mkdir ".bare" or die "$prompt: cannot create .bare directory: $!\n";
-system("mv * .bare") == 0 or die "$prompt: failed to move contents to .bare\n";
-open my $gitfile, '>', '.git' or die "$prompt: cannot open .git file: $!\n";
-print $gitfile "gitdir: ./.bare\n";
-close $gitfile;
+    chdir $output or die "$prompt: cannot change directory to $output: $!\n";
+    mkdir ".bare" or die "$prompt: cannot create .bare directory: $!\n";
+    system("mv * .bare") == 0 or die "$prompt: failed to move contents to .bare\n";
+    open my $gitfile, '>', '.git' or die "$prompt: cannot open .git file: $!\n";
+    print $gitfile "gitdir: ./.bare\n";
+    close $gitfile;
 
-my @branches = `git --no-pager branch`;
-chomp @branches;
-# @branches = grep { $_ !~ /^[*+]/ } @branches;
-@branches = map { s/^\**\s*//r } @branches;
+    my @branches = `git --no-pager branch`;
+    chomp @branches;
+    # @branches = grep { $_ !~ /^[*+]/ } @branches;
+    @branches = map { s/^\**\s*//r } @branches;
 
-if (@branches) {
-    foreach my $branch (@branches) {
-        # print("\$ git worktree add '$branch' '$branch'\n");
-        system("git worktree add '$branch' '$branch'") == 0 or print STDERR "$prompt: failed to add worktree for $branch\n";
+    if (@branches) {
+        foreach my $branch (@branches) {
+            # print("\$ git worktree add '$branch' '$branch'\n");
+            system("git worktree add '$branch' '$branch'") == 0 or print STDERR "$prompt: failed to add worktree for $branch\n";
+        }
     }
-}
 
-# system("git config remote.origin.url 'git@${input}'") == 0 or print STDERR "$prompt: Failed to set origin url\n";
-system("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'") == 0 or print STDERR "$prompt: failed to set fetch config\n";
-system("git fetch") == 0 or print STDERR "$prompt: failed to fetch from remote\n";
+    # system("git config remote.origin.url 'git@${input}'") == 0 or print STDERR "$prompt: Failed to set origin url\n";
+    system("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'") == 0 or print STDERR "$prompt: failed to set fetch config\n";
+    system("git fetch") == 0 or print STDERR "$prompt: failed to fetch from remote\n";
+}
+# }}}
+
+# sync {{{
+sub sync {
+    my $path = `git rev-parse --show-toplevel`;
+    chomp($path);
+    print("$path\n");
+}
+# }}}
 
 # }}}
 
