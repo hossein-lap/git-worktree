@@ -1,0 +1,3 @@
+= Git Bare +Worktree Wrapper
+
+Work with git bare-repo and worktrees, automated.
