@@ -1,0 +1,385 @@
+#!/usr/bin/env perl
+
+# TODO: give helper functions a better and meaningful comments
+
+use strict;
+use warnings;
+use Getopt::Long;
+use File::Basename;
+use Cwd;
+# use File::Copy;
+
+# variables {{{
+my $input = '';
+my $output = '';
+my $args = '';
+my $sshkey = '';
+my $help = 0;
+my $prompt = basename($0);
+# }}}
+
+# help function {{{
+sub print_help {
+    print <<"EOF";
+$prompt: setup git worktree and bare repo
+
+usage: [-h] [-u url] [-d directory] [-a extra_args]
+
+   • arguments:
+       -u --url      repo url (ssh)
+       -d --dir      directory name
+       -a --args     extra args (to pass to the git)
+       -h --help     print this message
+
+   • commands:
+       cp            copy a bare repo with its activated worktrees
+       mv            move a bare repo with its activated worktrees
+
+   • example:
+       $prompt -u gitlab.com:hos-workflow/scripts -d test.git -a '--depth 1'
+
+   • running without any arguments will show this message
+EOF
+}
+# }}}
+
+# argument parsing {{{
+GetOptions(
+    'u|url=s'      => \$input,
+    'd|dir=s'      => \$output,
+    'a|args=s'     => \$args,
+    'k|sshkey=s'   => \$sshkey,
+    'h|help'       => \$help,
+) or die "$prompt: Error in command line arguments. Use -h for help.\n";
+# }}}
+
+# helper functions {{{
+
+# get list of directories {{{
+sub dirlist {
+    my $path = $_[0];
+    $path =~ s,/$,,;
+    # print("dirlist: $path\n");
+    # system("ls $path");
+    die "$prompt: Please specify which directory to search" unless -d $path;
+    my @dirs;
+    opendir (my $dir, $path);
+    while (my $entry = readdir $dir) {
+        next unless -d $path . '/' . $entry;
+        next if $entry eq '.' or $entry eq '..';
+        # print "\tdirlist: $entry\n";
+        unless ($entry =~ /^.bare/) {
+            push(@dirs, $entry)
+        }
+    }
+    return @dirs;
+    closedir $dir;
+}
+# }}}
+
+# fix git dir {{{
+sub fixgitdir {
+    my $path_read = $_[0];
+    my $path_write = $_[1];
+    # my $base_read = $_[2];
+    # my $base_write = $_[3];
+    my $source = dirname($_[2]);
+    my $dest = dirname($_[3]);
+    open(INFO, '<' . $path_read) or die "$prompt: Error opening $path_read: $!\n";
+    open(OUT, '>' . $path_write) or die "$prompt: Error writing $path_write: $!\n";
+
+    # print("$path_read -> $path_write\n");
+
+    foreach my $line (<INFO>) {
+
+        # chomp($line);
+
+        # # print("i:        $path_read\n");
+        # # print("  $line\n");
+        # print("$line\n");
+        # $line =~ s,$source,$dest,g;
+        # print("$line\n");
+        # # print("o:        $path_write\n");
+        # # print("  $line\n");
+
+        print(OUT "$line");
+
+        # print("I: gitdir: $source\n");
+        # print("O: gitdir: $dest\n");
+
+    }
+    close(INFO);
+    close(OUT);
+}
+# }}}
+
+# move handler {{{
+sub move_handler {
+    my $file_source = $_[0];
+    my $file_dest = $_[1];
+    my $cmd = $_[2];
+    $file_dest =~ s,/$,,;
+    $file_source =~ s,/$,,;
+    my %files = (
+        src => {
+            base => basename($file_source),
+            dir  => dirname($file_source),
+        },
+        dest => {
+            base => basename($file_dest),
+            dir  => dirname($file_dest),
+        },
+        wt => {
+            src => {
+                dir => $file_source."/.bare/worktrees",
+            },
+            dest => {
+                dir => $file_dest."/.bare/worktrees",
+            },
+        },
+    );
+
+    unless (-d "$file_source/.bare") {
+        print(STDERR "$prompt: $cmd: $files{src}{base}: not a valid bare repository\n");
+        exit 1;
+    }
+
+    my $ready_to_move = 0;
+    my $exact_move = 0;
+    if (-d "$file_dest") {
+        if (-d "$file_dest/$files{dest}{base}") {
+            print(STDERR "$prompt: $cmd: $file_dest: file exists\n");
+            exit 1;
+        } else {
+            $ready_to_move = 1;
+            $exact_move = 1;
+        }
+    } else {
+        $ready_to_move = 1;
+    }
+
+    my $parsed_output_file = $file_dest;
+    if ($ready_to_move) {
+        if ($exact_move) {
+            $parsed_output_file = "$file_dest/$files{src}{base}";
+        }
+    } else {
+        print(STDERR "$prompt: cannot understand given command, try running the script with --help flag\n");
+        exit 1;
+    }
+
+    if (-f "$parsed_output_file") {
+        print(STDERR "$prompt: $cmd: $file_dest: cannot replace a file with directory\n");
+        exit 1;
+    }
+
+    if ($parsed_output_file eq "$file_dest/$files{src}{base}") {
+        if (-d "$parsed_output_file/.bare") {
+            print(STDERR "$prompt: $cmd: $file_dest: cannot overwrite an existing repo\n");
+        } else {
+            print(STDERR "$prompt: $cmd: $file_dest: cannot overwrite an existing directory\n");
+        }
+        exit 1;
+    }
+
+    my $err = 0;
+    if ($cmd eq "cp") {
+        $err = system("cp", "-r", "$file_source", "$parsed_output_file");
+        if ($err eq 0) {
+            print("$file_source -> $file_dest\n");
+        } else {
+            print(STDERR "$prompt: $cmd: command failed\n");
+        }
+    } elsif ($cmd eq "mv") {
+        $err = system("mv", "$file_source", "$parsed_output_file");
+        if ($err eq 0) {
+            print("$file_source -> $file_dest\n");
+        } else {
+            print(STDERR "$prompt: $cmd: command failed\n");
+        }
+    } else {
+        print(STDERR "$prompt: $cmd: cannot understand given command, try running the script with --help flag\n");
+        exit 1;
+    }
+
+    # # this is working as intended, just implement the thing
+    # # check if the basenames are the same or not
+    # if ($files{src}{base} eq $files{dest}{base}) {
+    #     print("dirname is included\n");
+    # } else {
+    #     print("dirname is NOT included\n");
+    # }
+
+    exit 0;
+
+    # my $file_dest_dir_bare = $file_dest."/.bare/worktrees";
+    # # my $file_dest_dir_worktree = $file_dest."/.bare/worktrees";
+
+    # print("$file_dest_dir_bare\n");
+    # print("$file_dest_dir_worktree\n");
+
+    # print("[baredir]\n");
+    # my @dirs_bare = dirlist($file_dest_dir_bare);
+    # foreach my $dir (@dirs_bare) {
+    #     my $branch_name = "$file_dest_dir_bare/$dir";
+    #     print("$branch_name\n");
+    #     system("cat $branch_name/gitdir");
+    #     # fixgitdir("$branch_name/gitdir", $file_source, $file_dest);
+    # }
+    # print("=========\n");
+
+    # print("\n");
+
+    # my $file_dest_dir_worktree = $file_dest."/.bare/worktrees";
+
+    # print("[worktrees]\n");
+    # my @dirs_worktree = dirlist($file_dest);
+    # for my $dir (@dirs_worktree) {
+    #     my $branch_read = "$file_source/$dir";
+    #     my $branch_write = "$file_dest/$dir";
+    #     my $expand = ".git";
+    # print("=========\n");
+    # print("=========\n");
+    # print("=========\n");
+    #     print("dir: $dir\n");
+    #     print("fsr: $file_source\n");
+    #     print("fds: $file_dest\n");
+    #     print("brr: $branch_read\n");
+    #     print("brw: $branch_write\n");
+    #     print("exp: $expand\n");
+    # print("=========\n");
+    # print("=========\n");
+    # print("=========\n");
+    #     # fixgitdir("$branch_read/$expand", "$branch_write/$expand", $file_source, $file_dest);
+    # }
+    # print("=========\n");
+    #
+    # print("[basedir]\n");
+    # my @dirs_bare = dirlist($file_dest."/.bare/worktrees");
+    # for my $dir (@dirs_bare) {
+    #     my $expand = ".bare/worktrees";
+    #     my $branch_read = "$file_source/$expand/$dir/gitdir";
+    #     my $branch_write = "$file_dest/$expand/$dir/gitdir";
+    #     fixgitdir("$branch_read", "$branch_write", $file_source, $file_dest);
+    # }
+    # print("=========\n");
+    #
+    # # my @dirs_bare = dirlist($file_dest_dir_worktree);
+    # # foreach my $dir (@dirs_bare) {
+    # #     my $branch_name = "$file_dest_dir_worktree/$dir\n";
+    # #     print("$branch_name");
+    # # }
+    #
+    # exit 0;
+
+}
+# }}}
+
+# command wrapper {{{
+sub wrapper_cmd {
+    my $cmd = $_[0];
+    my $err = 0;
+    if ($cmd eq "cp" || $cmd eq "mv") {
+        my $source = shift @ARGV;
+        my $destination = shift @ARGV;
+        move_handler($source, $destination, $cmd);
+    } else {
+        print(STDERR "$prompt: $cmd: Invalid command, try --help flag\n");
+        exit 2;
+    }
+
+}
+# }}}
+
+# }}}
+
+# starting point
+
+if ($help) {
+    print_help();
+    exit($help ? 0 : 1);
+}
+
+# handle commands {{{
+my $cmd = shift @ARGV;
+my $command = 1 if defined $cmd;
+
+if ($cmd) {
+    # decide: move command
+    wrapper_cmd($cmd);
+    exit 0;
+}
+# }}}
+
+# checking args  {{{
+unless ($command) {
+    if ($help || !$input) {
+        print_help();
+        exit($help ? 0 : 1);
+    }
+}
+
+if ($input =~ /https:/) {
+    my $_counter = split(":", $input); # 2: current, 1: none, 3: extra
+    my @_tmp = split("/", $input, 4);
+    if ($_counter eq 3) {
+        $input = "git\@$_tmp[2]/$_tmp[3]";
+    } else {
+        $input = "git\@$_tmp[2]:$_tmp[3]";
+    }
+}
+
+unless ($input =~ /git@/) {
+    $input = 'git@'.$input;
+}
+
+unless ($input =~ /.git$/) {
+    $input = $input.'.git';
+}
+
+my $_counter = split(":", $input); # 2: current, 1: none, 3: extra
+if ($_counter ne 2) {
+    if ($_counter eq 1) {
+        my @_tmp = split("/", $input, 2);
+        $input = "$_tmp[0]:$_tmp[1]";
+    }
+}
+
+if (!$output) {
+    print("No directory name is specified, Using default directory name, ");
+    ($output) = $input =~ m{([^/]+)$};
+}
+# }}}
+
+# main {{{
+
+my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
+my $clone_cmd = "$ssh_prefix git clone $args --bare $input $output";
+system($clone_cmd) == 0 or die "$prompt: failed to clone repository\n";
+system("cd $output; git config core.sshCommand 'ssh -i $ssh_prefix'; cd -") if $ssh_prefix;
+
+chdir $output or die "$prompt: cannot change directory to $output: $!\n";
+mkdir ".bare" or die "$prompt: cannot create .bare directory: $!\n";
+system("mv * .bare") == 0 or die "$prompt: failed to move contents to .bare\n";
+open my $gitfile, '>', '.git' or die "$prompt: cannot open .git file: $!\n";
+print $gitfile "gitdir: ./.bare\n";
+close $gitfile;
+
+my @branches = `git --no-pager branch`;
+chomp @branches;
+# @branches = grep { $_ !~ /^[*+]/ } @branches;
+@branches = map { s/^\**\s*//r } @branches;
+
+if (@branches) {
+    foreach my $branch (@branches) {
+        # print("\$ git worktree add '$branch' '$branch'\n");
+        system("git worktree add '$branch' '$branch'") == 0 or print STDERR "$prompt: failed to add worktree for $branch\n";
+    }
+}
+
+# system("git config remote.origin.url 'git@${input}'") == 0 or print STDERR "$prompt: Failed to set origin url\n";
+system("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'") == 0 or print STDERR "$prompt: failed to set fetch config\n";
+system("git fetch") == 0 or print STDERR "$prompt: failed to fetch from remote\n";
+
+# }}}
+
