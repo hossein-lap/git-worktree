@@ -7,7 +7,8 @@ use warnings;
 use Getopt::Long;
 use File::Basename;
 use Cwd;
-# use File::Copy;
+use File::Copy;
+use Term::ANSIColor;
 
 # variables {{{
 my $input = '';
@@ -51,6 +52,50 @@ usage: $prompt [COMMAND] [OPTIONS]
 EOF
 }
 # }}}
+
+# logger {{{
+sub logger {
+    my ($_msg, $level) = @_;
+    my @lex = split(" ", $_msg);
+    my @msg;
+
+    my $count = 0;
+    foreach my $key (@lex) {
+        if ($key =~ /'[^']*'|"[^"]*"/) {
+            push(@msg, colored($key, "yellow"));
+            next;
+        }
+        if ($count == 0) {
+            push(@msg, colored($key, "green"));
+        } elsif ($count == 1) {
+            push(@msg, colored($key, "white"));
+        } elsif ($count == 2) {
+            push(@msg, colored($key, "white"));
+        } else {
+            push(@msg, $key);
+        }
+        $count++;
+    }
+
+    my $message = "] @msg\n";
+    if ($level == 2) {
+        print(STDERR $message);
+    } else {
+        print(STDOUT $message);
+    }
+    exit 1 if $level > 2;
+}
+# }}}
+
+# # print(colored(['bold yellow on_magenta'], 'Yellow on magenta.', color("reset"), "\n"));
+# logger("git clone --bare git\@github.com:hossein-lap/vim-on-server.git", 2);
+# logger("mv * .bare", 2);
+# logger("echo 'gitdir: ./.bare' > .git", 2);
+# logger("git worktree add 'complete' 'complete'", 2);
+# logger("git worktree add 'master' 'master'", 2);
+# logger("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'", 2);
+# logger("git fetch", 2);
+# exit 0;
 
 # argument parsing {{{
 GetOptions(
@@ -303,10 +348,10 @@ sub wrapper_cmd {
     my $err = 0;
     if ($cmd eq "copy" || $cmd eq "move") {
         my $source = shift @ARGV;
-        my $destination = shift @ARGV;
-        move_handler($source, $destination, $cmd);
+        my $bare_dir = shift @ARGV;
+        move_handler($source, $bare_dir, $cmd);
     } elsif ($cmd eq "init") {
-        init();
+        init($input, $output);
     } elsif ($cmd eq "bulk") {
         bulk($action, @ignore);
     } elsif ($cmd eq "sync") {
@@ -357,17 +402,51 @@ sub url_handler {
 
 # init {{{
 sub init {
+    my ($input, $output) = @_;
     my $url = url_handler($input);
     my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
-    my $clone_cmd = "$ssh_prefix git clone $args --bare $input $output";
+    my $clone_cmd = "$ssh_prefix git clone $args --bare $input";
+    my $oldpath = getcwd;
+    my $cmd;
+
+    if ($output && $output ne "") {
+        $clone_cmd = "$clone_cmd $output";
+    } else {
+        ($output) = $input =~ m{([^/]+)$};
+    }
+
+    logger($clone_cmd, 2);
+    unless ($output && $output ne "") {
+        print("No directory name is specified, Using default directory name, ");
+    }
     system($clone_cmd) == 0 or die "$prompt: failed to clone repository\n";
-    system("cd $output; git config core.sshCommand 'ssh -i $ssh_prefix'; cd -") if $ssh_prefix;
+
+    if ($output && -d $output) {
+        if ($ssh_prefix) {
+            chdir $output;
+            $cmd = "git config core.sshCommand 'ssh -i $ssh_prefix'";
+            logger($cmd, 2);
+            system($cmd);
+            chdir $oldpath;
+        }
+    }
 
     chdir $output or die "$prompt: cannot change directory to $output: $!\n";
-    mkdir ".bare" or die "$prompt: cannot create .bare directory: $!\n";
-    system("mv * .bare") == 0 or die "$prompt: failed to move contents to .bare\n";
+    my $bare_dir = '.bare';  # change the .bare directory name if you want
+    mkdir $bare_dir or die "$prompt: cannot create .bare directory: $!\n";
+
+    opendir(my $dh, '.') or die "$prompt: failed to open directory: $!\n";
+    logger("mv * $bare_dir", 2);
+    while (my $file = readdir($dh)) {
+        next if $file eq '.' or $file eq '..' or $file eq $bare_dir;  # Skip current and parent directory entries
+        move($file, "$bare_dir/$file") or die "$prompt: failed to move $file to $bare_dir: $!\n";
+    }
+    closedir($dh);
+
     open my $gitfile, '>', '.git' or die "$prompt: cannot open .git file: $!\n";
-    print $gitfile "gitdir: ./.bare\n";
+        $cmd = "gitdir: ./$bare_dir";
+        logger("echo '$cmd' > .git", 2);
+        print $gitfile $cmd;
     close $gitfile;
 
     my @branches = `git --no-pager branch`;
@@ -376,15 +455,23 @@ sub init {
     @branches = map { s/^\**\s*//r } @branches;
 
     if (@branches) {
+        # logger("add worktree(s)", 2);
         foreach my $branch (@branches) {
             # print("\$ git worktree add '$branch' '$branch'\n");
-            system("git worktree add '$branch' '$branch'") == 0 or print STDERR "$prompt: failed to add worktree for $branch\n";
+            $cmd = "git worktree add '$branch' '$branch'";
+            logger($cmd, 2);
+            system($cmd) == 0 or print STDERR "$prompt: failed to add worktree for $branch\n";
         }
     }
 
     # system("git config remote.origin.url 'git@${input}'") == 0 or print STDERR "$prompt: Failed to set origin url\n";
-    system("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'") == 0 or print STDERR "$prompt: failed to set fetch config\n";
-    system("git fetch") == 0 or print STDERR "$prompt: failed to fetch from remote\n";
+    $cmd = "git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'";
+    logger($cmd, 2);
+    system($cmd) == 0 or print STDERR "$prompt: failed to set fetch config\n";
+
+    $cmd = "git fetch";
+    logger($cmd, 2);
+    system($cmd) == 0 or print STDERR "$prompt: failed to fetch from remote\n";
 }
 # }}}
 
