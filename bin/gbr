@@ -9,6 +9,7 @@ use File::Basename;
 use Cwd;
 use File::Copy;
 use Term::ANSIColor;
+use Text::ParseWords;
 
 # variables {{{
 my $input = '';
@@ -31,54 +32,45 @@ usage: $prompt [COMMAND] [OPTIONS]
 
    • COMMAND
        init            clone the git repository and setup the worktrees
-       sync            sync all worktrees with the remote (create new ones)
+       sync (WIP)      sync all worktrees with the remote (create new ones)
        bulk            run a shell command in all current (active) worktrees
-       copy            copy a bare repo with its activated worktrees
-       move            move a bare repo with its activated worktrees
+       copy (WIP)      copy a bare repo with its activated worktrees
+       move (WIP)      move a bare repo with its activated worktrees
 
    • OPTIONS
-       --url      repository url        (remote)
-       --dir      repository directory  (local)
-       --args     extra git arguments
-       --action   bulk action
-       --ignore   ignore worktree (bulk action)
-       --silent   no extra output (bulk action)
-       --help     print this message
+       General:
+           --args     extra git arguments
+           --help     print this message
+           --silent   no extra output (bulk action)
+       init:
+           --url      repository url        (remote)
+           --dir      repository directory  (local)
+       bulk:
+           --action   the action
+           --ignore   ignore worktree
 
    • EXAMPLE:
        $prompt init --url gitlab.com:hos-workflow/scripts --dir test.git --args '--depth 1'
 
-   • running without any arguments will show this message
+   • running without any command will show this message
 EOF
 }
 # }}}
 
 # logger {{{
 sub logger {
-    my ($_msg, $level) = @_;
-    my @lex = split(" ", $_msg);
-    my @msg;
+    my ($msg, $level, $name) = @_;
+    my ($package, $filename, $line) = caller();
+    my $subname = (caller(0))[3];
+    my $message;
 
-    my $count = 0;
-    foreach my $key (@lex) {
-        if ($key =~ /'[^']*'|"[^"]*"/) {
-            push(@msg, colored($key, "yellow"));
-            next;
-        }
-        if ($count == 0) {
-            push(@msg, colored($key, "green"));
-        } elsif ($count == 1) {
-            push(@msg, colored($key, "white"));
-        } elsif ($count == 2) {
-            push(@msg, colored($key, "white"));
-        } else {
-            push(@msg, $key);
-        }
-        $count++;
+    if ($name) {
+        $subname = $name;
     }
 
-    my $message = "] @msg\n";
-    if ($level == 2) {
+    $message = "] $prompt $subname $line | $msg\n";
+
+    if ($level >= 2) {
         print(STDERR $message);
     } else {
         print(STDOUT $message);
@@ -87,14 +79,47 @@ sub logger {
 }
 # }}}
 
+# pretty {{{
+sub pretty {
+    my ($_msg, $level) = @_;
+    # keep=1 so quotes are preserved in tokens
+    my @lex = quotewords('\s+', 1, $_msg);
+    my @msg;
+    my $count = 0;
+    for my $key (@lex) {
+        # check if token starts and ends with same type of quote
+        if ((substr($key, 0, 1) eq '"' && substr($key, -1, 1) eq '"')
+           || (substr($key, 0, 1) eq "'" && substr($key, -1, 1) eq "'")) {
+            push @msg, colored($key, 'yellow');
+            next;
+        }
+        if ($count == 0) {
+            push @msg, colored($key, 'green');
+        } elsif ($count <= 2) {
+            push @msg, colored($key, 'white');
+        } else {
+            push @msg, $key;
+        }
+        $count++;
+    }
+    my $message = "] @msg\n";
+    if ($level == 2) {
+        print STDERR $message;
+    } else {
+        print STDOUT $message;
+    }
+    exit 1 if $level > 2;
+}
+# }}}
+
 # # print(colored(['bold yellow on_magenta'], 'Yellow on magenta.', color("reset"), "\n"));
-# logger("git clone --bare git\@github.com:hossein-lap/vim-on-server.git", 2);
-# logger("mv * .bare", 2);
-# logger("echo 'gitdir: ./.bare' > .git", 2);
-# logger("git worktree add 'complete' 'complete'", 2);
-# logger("git worktree add 'master' 'master'", 2);
-# logger("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'", 2);
-# logger("git fetch", 2);
+# pretty("git clone --bare git\@github.com:hossein-lap/vim-on-server.git", 2);
+# pretty("mv * .bare", 2);
+# pretty("echo 'gitdir: ./.bare' > .git", 2);
+# pretty("git worktree add 'complete' 'complete'", 2, "print_usage");
+# pretty("git worktree add 'master' 'master'", 2);
+# pretty("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'", 2);
+# pretty("git fetch", 2);
 # exit 0;
 
 # argument parsing {{{
@@ -107,7 +132,7 @@ GetOptions(
     'sshkey=s'   => \$sshkey,
     'silent'     => \$silent,
     'h|help'     => \$help,
-) or die "$prompt: Error in command line arguments. Use -h for help.\n";
+) or logger("Error in command line arguments. Use -h for help.", 3);
 # }}}
 
 # helper functions {{{
@@ -355,10 +380,10 @@ sub wrapper_cmd {
     } elsif ($cmd eq "bulk") {
         bulk($action, @ignore);
     } elsif ($cmd eq "sync") {
-        sync();
+        sync(@ignore);
     } else {
-        print(STDERR "$prompt: $cmd: Invalid command, try --help flag\n");
-        exit 2;
+        logger("Invalid command: $cmd", 2);
+        logger("Try --help flag", 3);
     }
 
 }
@@ -403,6 +428,7 @@ sub url_handler {
 # init {{{
 sub init {
     my ($input, $output) = @_;
+    my $subname = (caller(0))[3];
     my $url = url_handler($input);
     my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
     my $clone_cmd = "$ssh_prefix git clone $args --bare $input";
@@ -415,7 +441,7 @@ sub init {
         ($output) = $input =~ m{([^/]+)$};
     }
 
-    logger($clone_cmd, 2);
+    pretty($clone_cmd, 2);
     unless ($output && $output ne "") {
         print("No directory name is specified, Using default directory name, ");
     }
@@ -425,7 +451,7 @@ sub init {
         if ($ssh_prefix) {
             chdir $output;
             $cmd = "git config core.sshCommand 'ssh -i $ssh_prefix'";
-            logger($cmd, 2);
+            pretty($cmd, 2);
             system($cmd);
             chdir $oldpath;
         }
@@ -436,7 +462,7 @@ sub init {
     mkdir $bare_dir or die "$prompt: cannot create .bare directory: $!\n";
 
     opendir(my $dh, '.') or die "$prompt: failed to open directory: $!\n";
-    logger("mv * $bare_dir", 2);
+    pretty("mv * $bare_dir", 2);
     while (my $file = readdir($dh)) {
         next if $file eq '.' or $file eq '..' or $file eq $bare_dir;  # Skip current and parent directory entries
         move($file, "$bare_dir/$file") or die "$prompt: failed to move $file to $bare_dir: $!\n";
@@ -445,7 +471,7 @@ sub init {
 
     open my $gitfile, '>', '.git' or die "$prompt: cannot open .git file: $!\n";
         $cmd = "gitdir: ./$bare_dir";
-        logger("echo '$cmd' > .git", 2);
+        pretty("echo '$cmd' > .git", 2);
         print $gitfile $cmd;
     close $gitfile;
 
@@ -455,43 +481,136 @@ sub init {
     @branches = map { s/^\**\s*//r } @branches;
 
     if (@branches) {
-        # logger("add worktree(s)", 2);
+        # pretty("add worktree(s)", 2);
         foreach my $branch (@branches) {
             # print("\$ git worktree add '$branch' '$branch'\n");
             $cmd = "git worktree add '$branch' '$branch'";
-            logger($cmd, 2);
+            pretty($cmd, 2);
             system($cmd) == 0 or print STDERR "$prompt: failed to add worktree for $branch\n";
         }
     }
 
     # system("git config remote.origin.url 'git@${input}'") == 0 or print STDERR "$prompt: Failed to set origin url\n";
     $cmd = "git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'";
-    logger($cmd, 2);
+    pretty($cmd, 2);
     system($cmd) == 0 or print STDERR "$prompt: failed to set fetch config\n";
 
     $cmd = "git fetch";
-    logger($cmd, 2);
+    pretty($cmd, 2);
     system($cmd) == 0 or print STDERR "$prompt: failed to fetch from remote\n";
 }
 # }}}
 
 # sync {{{
 sub sync {
-    my $path = `git rev-parse --show-toplevel`;
-    chomp($path);
-    print("$path\n");
+    my (@ignore) = @_;
+    my $subname = (caller(0))[3];
+    my $cmd = "git fetch";
+
+    my $caution = colored(" Caution ", "bold on_red");
+    print(STDERR $caution, " Possible data loss ", $caution, "\n");
+    print(STDERR "This function will sync your local AND remote repository together\n");
+    # print("Are you sure about this? (y/N) ");
+    print(STDERR "  Are you sure about this? (y/N) ");
+    my $answer = <STDIN>;
+    chomp($answer);
+    unless ($answer =~ /[yY]/) {
+        exit 0;
+    }
+    print("\n", colored("Running with caution", "bold red"), "\n");
+    print("\n");
+
+    # pretty($cmd, 2);
+    # system($cmd) == 0 or print STDERR "$prompt: failed to fetch from remote\n";
+
+    my $root_path = `git rev-parse --show-toplevel`;
+    chomp($root_path);
+    my ($result_ref, $exit_code) = commander("git branch -a");
+    my @branchs = @{$result_ref};
+    my @branches_remote;
+    my @branches_local;
+    my @branches_uniq;
+    my @branches_all;
+    
+    foreach my $branch (@branchs) {
+        my %hashed;
+        $branch =~ s/^..//;
+        my @_branch = split(" ", $branch);
+        if ($_branch[0] =~ /HEAD/) {
+            next;
+        }
+        if ($_branch[0] =~ /remote/) {
+            my @lex = split("/", $_branch[0], 3);
+            splice(@lex, 0, 2);
+            my $lexed = join("/", @lex);
+            %hashed = (name => $lexed, from => "remote");
+            push(@branches_remote, \%hashed);
+        } else {
+            %hashed = (name => $_branch[0], from => "local");
+            push(@branches_local, \%hashed);
+        }
+    }
+
+    # print("local:\n");
+    # foreach my $local (@branches_local) {
+    #     print("- name: $local->{name}\n");
+    #     # print("  from: $local->{from}\n");
+    #     # push(@branches_all, $local);
+    # }
+    #
+    # print("remote:\n");
+    # foreach my $remote (@branches_remote) {
+    #     print("- name: $remote->{name}\n");
+    #     # print("  from: $remote->{from}\n");
+    #     # push(@branches_all, $remote);
+    # }
+
+    my %_branches;
+    foreach my $item (@branches_remote, @branches_local) {
+        $_branches{ $item->{name} }{ $item->{from} } = 1;
+    }
+    foreach my $name (sort keys %_branches) {
+        my @sources = keys %{ $_branches{$name} };
+        if (@sources == 1) {
+            my %hashed = (name => $name, from => $sources[0]);
+            push(@branches_uniq, \%hashed);
+        }
+    }
+
+    my $changes_local = 0;
+    my $changes_remote = 0;
+
+    # print("uniq:\n");
+    foreach my $uniq (@branches_uniq) {
+        if ($uniq->{from} eq "remote") {
+            $changes_remote++;
+        } else {
+            $changes_local++;
+        }
+        # print("- name: $uniq->{name}\n");
+        # print("  from: $uniq->{from}\n");
+    }
+    print("  found $changes_local local changes \n");
+    print("  found $changes_remote remote changes \n");
+    print("\n");
+    print(colored("Proceed...", "bold red"), "\n");
+    print("\n");
+
+    # chdir "..";
+    # foreach my $branch (@
+    # print("$root_path\n");
+
 }
 # }}}
 
 # bulk action {{{
 sub bulk {
+    my ($shell_cmd) = @_;
     my $subname = (caller(0))[3];
     my $msg_prefix = "$subname [worktree] ";
     $msg_prefix = "" if $silent;
-    my ($shell_cmd) = @_;
     unless ($shell_cmd) {
-        print(STDERR "No action is specified\n");
-        exit 1;
+        logger("No action is specified", 3, $subname);
     }
     my ($result_ref, $exit_code) = commander("git worktree list");
     my @_worktrees = @{$result_ref};
@@ -563,12 +682,11 @@ unless ($command) {
     if ($help || !$input) {
         print_help();
         exit($help ? 0 : 1);
+    } else {
+        logger("No command is specified", 2);
+        logger("Try --help", 3);
     }
 }
 
-if (!$output) {
-    print("No directory name is specified, Using default directory name, ");
-    ($output) = $input =~ m{([^/]+)$};
-}
 # }}}
 
