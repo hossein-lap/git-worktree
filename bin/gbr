@@ -432,6 +432,7 @@ sub init {
     my $url = url_handler($input);
     my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
     my $clone_cmd = "$ssh_prefix git clone $args --bare $input";
+    $clone_cmd =~ s/^\s+|\s+$//g;
     my $oldpath = getcwd;
     my $cmd;
 
@@ -508,7 +509,9 @@ sub sync {
     my $cmd = "git fetch";
 
     my $caution = colored(" Caution ", "bold on_red");
+    print(STDERR "\n");
     print(STDERR $caution, " Possible data loss ", $caution, "\n");
+    print(STDERR "\n");
     print(STDERR "This function will sync your local AND remote repository together\n");
     # print("Are you sure about this? (y/N) ");
     print(STDERR "  Are you sure about this? (y/N) ");
