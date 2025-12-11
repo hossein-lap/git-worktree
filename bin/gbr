@@ -401,9 +401,9 @@ sub url_handler {
         my $_counter = split(":", $input); # 2: current, 1: none, 3: extra
         my @_tmp = split("/", $input, 4);
         if ($_counter eq 3) {
-            $input = "git\@$_tmp[2]/$_tmp[3]";
+            $input = 'git@'.$_tmp[2].'/'.$_tmp[3];
         } else {
-            $input = "git\@$_tmp[2]:$_tmp[3]";
+            $input = 'git@'.$_tmp[2].'/'.$_tmp[3];
         }
     }
 
@@ -419,7 +419,7 @@ sub url_handler {
     if ($_counter ne 2) {
         if ($_counter eq 1) {
             my @_tmp = split("/", $input, 2);
-            $input = "$_tmp[0]:$_tmp[1]";
+            $input = $_tmp[0].':'.$_tmp[1];
         }
     }
     return $input;
@@ -436,7 +436,7 @@ sub init {
     my $subname = (caller(0))[3];
     my $url = url_handler($input);
     my $ssh_prefix = $sshkey ? "GIT_SSH_COMMAND='ssh -i $sshkey'" : '';
-    my $clone_cmd = "$ssh_prefix git clone $args --bare $input";
+    my $clone_cmd = "$ssh_prefix git clone $args --bare $url";
     $clone_cmd =~ s/^\s+|\s+$//g;
     my $oldpath = getcwd;
     my $cmd;
@@ -474,7 +474,7 @@ sub init {
     }
     closedir($dh);
 
-    open my $gitfile, '>', '$git_file' or die "$prompt: cannot open $git_file file: $!\n";
+    open my $gitfile, '>', "$git_file" or die "$prompt: cannot open $git_file file: $!\n";
         $cmd = "gitdir: ./$bare_dir";
         pretty("echo '$cmd' > $git_file", 2);
         print $gitfile $cmd;
