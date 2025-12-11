@@ -21,6 +21,9 @@ my $sshkey = '';
 my $help = 0;
 my $silent = 0;
 my $prompt = basename($0);
+
+my $bare_dir = '.bare';  # change the .bare directory name if you want
+my $git_file = '.git';  # change the .bare directory name if you want
 # }}}
 
 # help function {{{
@@ -114,8 +117,8 @@ sub pretty {
 
 # # print(colored(['bold yellow on_magenta'], 'Yellow on magenta.', color("reset"), "\n"));
 # pretty("git clone --bare git\@github.com:hossein-lap/vim-on-server.git", 2);
-# pretty("mv * .bare", 2);
-# pretty("echo 'gitdir: ./.bare' > .git", 2);
+# pretty("mv * $bare_dir", 2);
+# pretty("echo 'gitdir: ./$bare_dir' > $git_file", 2);
 # pretty("git worktree add 'complete' 'complete'", 2, "print_usage");
 # pretty("git worktree add 'master' 'master'", 2);
 # pretty("git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'", 2);
@@ -160,7 +163,7 @@ sub dirlist {
         next unless -d $path . '/' . $entry;
         next if $entry eq '.' or $entry eq '..';
         # print "\tdirlist: $entry\n";
-        unless ($entry =~ /^.bare/) {
+        unless ($entry =~ /^$bare_dir/) {
             push(@dirs, $entry)
         }
     }
@@ -223,15 +226,15 @@ sub move_handler {
         },
         wt => {
             src => {
-                dir => $file_source."/.bare/worktrees",
+                dir => $file_source."/$bare_dir/worktrees",
             },
             dest => {
-                dir => $file_dest."/.bare/worktrees",
+                dir => $file_dest."/$bare_dir/worktrees",
             },
         },
     );
 
-    unless (-d "$file_source/.bare") {
+    unless (-d "$file_source/$bare_dir") {
         print(STDERR "$prompt: $cmd: $files{src}{base}: not a valid bare repository\n");
         exit 1;
     }
@@ -266,7 +269,7 @@ sub move_handler {
     }
 
     if ($parsed_output_file eq "$file_dest/$files{src}{base}") {
-        if (-d "$parsed_output_file/.bare") {
+        if (-d "$parsed_output_file/$bare_dir") {
             print(STDERR "$prompt: $cmd: $file_dest: cannot overwrite an existing repo\n");
         } else {
             print(STDERR "$prompt: $cmd: $file_dest: cannot overwrite an existing directory\n");
@@ -304,8 +307,8 @@ sub move_handler {
 
     exit 0;
 
-    # my $file_dest_dir_bare = $file_dest."/.bare/worktrees";
-    # # my $file_dest_dir_worktree = $file_dest."/.bare/worktrees";
+    # my $file_dest_dir_bare = $file_dest."/$bare_dir/worktrees";
+    # # my $file_dest_dir_worktree = $file_dest."/$bare_dir/worktrees";
 
     # print("$file_dest_dir_bare\n");
     # print("$file_dest_dir_worktree\n");
@@ -322,14 +325,14 @@ sub move_handler {
 
     # print("\n");
 
-    # my $file_dest_dir_worktree = $file_dest."/.bare/worktrees";
+    # my $file_dest_dir_worktree = $file_dest."/$bare_dir/worktrees";
 
     # print("[worktrees]\n");
     # my @dirs_worktree = dirlist($file_dest);
     # for my $dir (@dirs_worktree) {
     #     my $branch_read = "$file_source/$dir";
     #     my $branch_write = "$file_dest/$dir";
-    #     my $expand = ".git";
+    #     my $expand = "$git_file";
     # print("=========\n");
     # print("=========\n");
     # print("=========\n");
@@ -347,9 +350,9 @@ sub move_handler {
     # print("=========\n");
     #
     # print("[basedir]\n");
-    # my @dirs_bare = dirlist($file_dest."/.bare/worktrees");
+    # my @dirs_bare = dirlist($file_dest."/$bare_dir/worktrees");
     # for my $dir (@dirs_bare) {
-    #     my $expand = ".bare/worktrees";
+    #     my $expand = "$bare_dir/worktrees";
     #     my $branch_read = "$file_source/$expand/$dir/gitdir";
     #     my $branch_write = "$file_dest/$expand/$dir/gitdir";
     #     fixgitdir("$branch_read", "$branch_write", $file_source, $file_dest);
@@ -379,6 +382,8 @@ sub wrapper_cmd {
         init($input, $output);
     } elsif ($cmd eq "bulk") {
         bulk($action, @ignore);
+    } elsif ($cmd eq "fix") {
+        path_fix();
     } elsif ($cmd eq "sync") {
         sync(@ignore);
     } else {
@@ -459,8 +464,7 @@ sub init {
     }
 
     chdir $output or die "$prompt: cannot change directory to $output: $!\n";
-    my $bare_dir = '.bare';  # change the .bare directory name if you want
-    mkdir $bare_dir or die "$prompt: cannot create .bare directory: $!\n";
+    mkdir $bare_dir or die "$prompt: cannot create $bare_dir directory: $!\n";
 
     opendir(my $dh, '.') or die "$prompt: failed to open directory: $!\n";
     pretty("mv * $bare_dir", 2);
@@ -470,9 +474,9 @@ sub init {
     }
     closedir($dh);
 
-    open my $gitfile, '>', '.git' or die "$prompt: cannot open .git file: $!\n";
+    open my $gitfile, '>', '$git_file' or die "$prompt: cannot open $git_file file: $!\n";
         $cmd = "gitdir: ./$bare_dir";
-        pretty("echo '$cmd' > .git", 2);
+        pretty("echo '$cmd' > $git_file", 2);
         print $gitfile $cmd;
     close $gitfile;
 
@@ -606,6 +610,49 @@ sub sync {
 }
 # }}}
 
+# path fix {{{
+# fix worktrees' hardcoded paths after move/copy
+sub path_fix {
+    my $found_bare_dir = 0;
+    my $found_git_file = 0;
+    my $inside_cwd = 0;
+    my $root_path;
+    logger(colored("looking for $git_file file", "blue"), 1);
+    if (-f "$git_file") {
+        logger(colored("found $git_file file in current working directory", "green"), 1);
+        $found_git_file = 1;
+    }
+    if ($found_git_file) {
+        logger(colored("looking for $bare_dir directory", "blue"), 1);
+        if (-d "../$bare_dir") {
+            logger(colored("found $bare_dir directory", "green"), 1);
+            $found_bare_dir = 1;
+            $inside_cwd = 1;
+        }
+    }
+    logger(colored("looking for $bare_dir directory", "blue"), 1);
+    if (-d $bare_dir) {
+        logger(colored("found $bare_dir directory in current working directory", "green"), 1);
+        $found_bare_dir = 1;
+        if (-d "../$git_file") {
+            logger(colored("found $git_file file", "green"), 1);
+            $found_git_file = 1;
+        }
+    }
+    unless ($git_file && $bare_dir) {
+        logger(colored("no $git_file file nor $bare_dir directory found", "magenta"), 2);
+        logger(colored("$prompt cannot work with this repostory", "magenta"), 2);
+        logger(colored("abort", "red"), 3);
+    }
+
+    my $current_path = cwd();
+    print(STDERR "[$current_path]\n");
+    logger("we are inside a git worktree", 1);
+
+    # exit 0;
+}
+# }}}
+
 # bulk action {{{
 sub bulk {
     my ($shell_cmd) = @_;
@@ -619,7 +666,7 @@ sub bulk {
     my @_worktrees = @{$result_ref};
     my @worktrees;
     foreach my $worktree (@_worktrees) {
-        if ($worktree =~ /\.bare/) {
+        if ($worktree =~ /$bare_dir/) {
             next;
         }
         my @_worktree = split(" ", $worktree);
