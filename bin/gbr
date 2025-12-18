@@ -411,9 +411,7 @@ sub url_handler {
         $input = 'git@'.$input;
     }
 
-    unless ($input =~ /.git$/) {
-        $input = $input.'.git';
-    }
+    $input = $input.'.git' unless $input =~ /.git$/;
 
     my $_counter = split(":", $input); # 2: current, 1: none, 3: extra
     if ($_counter ne 2) {
@@ -453,6 +451,7 @@ sub init {
     }
     system($clone_cmd) == 0 or die "$prompt: failed to clone repository\n";
 
+    $output = $output.'.git' unless $output =~ /.git$/;
     if ($output && -d $output) {
         if ($ssh_prefix) {
             chdir $output;
