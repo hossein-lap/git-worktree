@@ -151,8 +151,9 @@ sub commander {
 # }}}
 
 # get list of directories {{{
-sub dirlist {
-    my $path = $_[0];
+sub finder {
+    my ($path, $type) = @_;
+    $type //= "a";
     $path =~ s,/$,,;
     # print("dirlist: $path\n");
     # system("ls $path");
@@ -160,11 +161,18 @@ sub dirlist {
     my @dirs;
     opendir (my $dir, $path);
     while (my $entry = readdir $dir) {
+        my $fullname = "$path/$entry";
+        if ($type eq "f") {
+            next unless -f $fullname;
+        }
+        if ($type eq "d") {
+            next unless -d $fullname;
+        }
         next unless -d $path . '/' . $entry;
         next if $entry eq '.' or $entry eq '..';
         # print "\tdirlist: $entry\n";
         unless ($entry =~ /^$bare_dir/) {
-            push(@dirs, $entry)
+            push(@dirs, $fullname)
         }
     }
     return @dirs;
@@ -314,7 +322,7 @@ sub move_handler {
     # print("$file_dest_dir_worktree\n");
 
     # print("[baredir]\n");
-    # my @dirs_bare = dirlist($file_dest_dir_bare);
+    # my @dirs_bare = finder($file_dest_dir_bare);
     # foreach my $dir (@dirs_bare) {
     #     my $branch_name = "$file_dest_dir_bare/$dir";
     #     print("$branch_name\n");
@@ -328,7 +336,7 @@ sub move_handler {
     # my $file_dest_dir_worktree = $file_dest."/$bare_dir/worktrees";
 
     # print("[worktrees]\n");
-    # my @dirs_worktree = dirlist($file_dest);
+    # my @dirs_worktree = finder($file_dest);
     # for my $dir (@dirs_worktree) {
     #     my $branch_read = "$file_source/$dir";
     #     my $branch_write = "$file_dest/$dir";
@@ -350,7 +358,7 @@ sub move_handler {
     # print("=========\n");
     #
     # print("[basedir]\n");
-    # my @dirs_bare = dirlist($file_dest."/$bare_dir/worktrees");
+    # my @dirs_bare = finder($file_dest."/$bare_dir/worktrees");
     # for my $dir (@dirs_bare) {
     #     my $expand = "$bare_dir/worktrees";
     #     my $branch_read = "$file_source/$expand/$dir/gitdir";
@@ -359,7 +367,7 @@ sub move_handler {
     # }
     # print("=========\n");
     #
-    # # my @dirs_bare = dirlist($file_dest_dir_worktree);
+    # # my @dirs_bare = finder($file_dest_dir_worktree);
     # # foreach my $dir (@dirs_bare) {
     # #     my $branch_name = "$file_dest_dir_worktree/$dir\n";
     # #     print("$branch_name");
@@ -614,39 +622,70 @@ sub sync {
 sub path_fix {
     my $found_bare_dir = 0;
     my $found_git_file = 0;
-    my $inside_cwd = 0;
+    my $inside_worktree = 0;
     my $root_path;
-    logger(colored("looking for $git_file file", "blue"), 1);
+    my @worktrees_active;
+    my $pwd = getcwd;
+
+    # check for .git file
+    logger(colored("looking for $git_file file", "magenta"), 1);
     if (-f "$git_file") {
-        logger(colored("found $git_file file in current working directory", "green"), 1);
+        logger(colored("found $git_file file in current directory", "green"), 1);
         $found_git_file = 1;
+        $inside_worktree = 1;
+    } else {
+        logger(colored("no $git_file found in current directory", "yellow"), 2);
     }
-    if ($found_git_file) {
-        logger(colored("looking for $bare_dir directory", "blue"), 1);
-        if (-d "../$bare_dir") {
-            logger(colored("found $bare_dir directory", "green"), 1);
-            $found_bare_dir = 1;
-            $inside_cwd = 1;
-        }
-    }
-    logger(colored("looking for $bare_dir directory", "blue"), 1);
+
+    # check for .bare directory
+    logger(colored("looking for $bare_dir directory", "magenta"), 1);
     if (-d $bare_dir) {
-        logger(colored("found $bare_dir directory in current working directory", "green"), 1);
+        logger(colored("found $bare_dir directory in current directory", "green"), 1);
         $found_bare_dir = 1;
-        if (-d "../$git_file") {
-            logger(colored("found $git_file file", "green"), 1);
-            $found_git_file = 1;
+        $inside_worktree = 0;
+    } else {
+        logger(colored("no $bare_dir found in current directory", "yellow"), 2);
+    }
+
+    #     if (-d "../$git_file") {
+    #         logger(colored("found $git_file file", "green"), 1);
+    #         $found_git_file = 1;
+    #     }
+
+    if ($inside_worktree) {
+        if (-d "../$bare_dir") {
+            logger(colored("found $bare_dir in parent directory", "green"), 1);
+            $found_bare_dir = 1;
         }
     }
-    unless ($git_file && $bare_dir) {
-        logger(colored("no $git_file file nor $bare_dir directory found", "magenta"), 2);
-        logger(colored("$prompt cannot work with this repostory", "magenta"), 2);
+
+    if ($found_git_file && $found_bare_dir) {
+        # logger(colored("no $git_file file nor $bare_dir directory found", "magenta"), 2);
+        # logger(colored("$prompt cannot work with this repostory", "magenta"), 2);
+        if ($inside_worktree) {
+            logger(colored("we are inside a worktree", "blue"), 2);
+            $root_path = "$pwd/..";
+        } else {
+            logger(colored("we are outside of the worktrees", "blue"), 2);
+            $root_path = "$pwd";
+        }
+        @worktrees_active = finder($root_path, "d");
+    } else {
         logger(colored("abort", "red"), 3);
     }
 
-    my $current_path = cwd();
-    print(STDERR "[$current_path]\n");
-    logger("we are inside a git worktree", 1);
+    logger(colored("root: $root_path", "blue"), 1) if -d $root_path;
+    foreach my $worktree (@worktrees_active) {
+	    logger(colored("worktree: $worktree", "blue"), 1) if -d $worktree;
+	    # logger(colored("$pwd/${worktree}: found $git_file", "yellow"), 1);
+    }
+
+    # open(INFO, '<' . $path_read) or die "$prompt: Error opening $path_read: $!\n";
+    # foreach my $line (<INFO>) {
+    # }
+
+    # print(STDERR "[$current_path]\n");
+    # logger("we are inside a git worktree", 1);
 
     # exit 0;
 }
